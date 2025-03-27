@@ -1,385 +1,306 @@
-# # from fastapi import FastAPI, UploadFile, File
-# # from docx import Document
-# # from transformers import pipeline
-# # from elasticsearch import Elasticsearch
-# # import uvicorn
-# # from pydantic import BaseModel
-# # import faiss
-# # import numpy as np
-# # from typing import List
-
-# # #from embedding import generate_embeddings  # Import your function
-
-# # from embedding import split_text, generate_embeddings, store_in_faiss, search_faiss
-
-# # app = FastAPI()
-# # chunks = []
-
-# # # Load FAISS index
-# # index = faiss.read_index("faiss_index.idx")
-
-# # # Connect to Elasticsearch
-# # #es = Elasticsearch("http://localhost:9200")
-
-# # # Load Hugging Face summarization model
-# # summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-
-# # @app.post("/upload/")
-# # async def upload_file(file: UploadFile = File(...)):
-# #     if not file.filename.endswith(".docx"):
-# #         return {"error": "Only .docx files are supported"}
-
-# #     # Read the Word document
-# #     doc = Document(file.file)
-# #     full_text = "\n".join([para.text for para in doc.paragraphs])
-
-# #     # Summarize the content
-# #     summary = summarizer(full_text, max_length=100, min_length=30, do_sample=False)
-# #     summarized_text = summary[0]["summary_text"]
-
-# #     # Store document in Elasticsearch
-# #     doc_id = file.filename  # Using filename as document ID
-# #     #es.index(index="aipocdoc", id=doc_id, document={"text": full_text, "summary": summarized_text})
-
-# #     return {"summary": summarized_text, "message": "Stored in Elasticsearch"}
-
-# # @app.get("/")
-# # def read_root():
-# #     return {"message": "FastAPI is working!"}
-
-# # class TextRequest(BaseModel):
-# #     #text: str  # Ensure text is expected
-# #     documents:List[str] # Expecting a list of text inputs
-
-
-# # # @app.post("/embed/") #for single text
-# # # async def embed_text(request: TextRequest):
-# # #     """Receives text, generates embeddings, and stores them in FAISS"""
-# # #     text_chunks = split_text(request.text)
-# # #     embeddings = generate_embeddings(text_chunks)
-# # #     store_in_faiss(embeddings)
-# # #     return {"message": "Embeddings generated and stored in FAISS!"}
-
-
-# # @app.post("/embed/")
-# # async def embed_text(request: TextRequest):
-# #     """Receives multiple text inputs, generates embeddings, and stores them in FAISS"""
-# #     all_embeddings = []
-    
-# #     for text in request.documents:  # Iterate over each text input
-# #         text_chunks = split_text(text)
-# #         embeddings = generate_embeddings(text_chunks)
-# #         all_embeddings.extend(embeddings)  # Collect embeddings for all texts
-
-# #     store_in_faiss(all_embeddings)  # Store all embeddings in FAISS
-# #     return {"message": "Embeddings generated and stored in FAISS!"}
-
-# # @app.post("/search")
-# # # async def search(request: TextRequest):
-# # #     query_vector = np.random.rand(1, 384).astype("float32")  # Dummy vector, replace with actual embedding logic
-# # #     _, indices = index.search(query_vector, 3)
-# # #     return {"text": request.query, "matches": indices.tolist()[0]}
-
-# # #     return {"text": request.query, "matches": indexes[0].tolist()}
-
-# # async def search(request: TextRequest):
-# #     query_vector = np.random.rand(1, 384).astype("float32")  # Replace with actual embeddings
-# #     _, indices = index.search(query_vector, 3)
-# #     return {"text": request.text, "matches": indices.tolist()[0]}
-
-# # if __name__ == "__main__":
-# #     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-# from fastapi import FastAPI, UploadFile, File
-# from docx import Document
-# from transformers import pipeline
-# import uvicorn
-# from pydantic import BaseModel
+# from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+# from fastapi.responses import JSONResponse
+# from sentence_transformers import SentenceTransformer, util
 # import faiss
 # import numpy as np
-# from typing import List
-
-# from embedding import split_text, generate_embeddings, store_in_faiss, search_faiss
-
-# from fastapi import FastAPI, Query
-# from sentence_transformers import SentenceTransformer
-# import faiss
-# import numpy as np
-# from gpt4all import GPT4All
-
-
-
-
+# import os
+# import shutil
+# import uuid
+# import PyPDF2
+# import docx
+# import json
 
 # app = FastAPI()
-# chunks = []
 
-# # Load FAISS index
-# index = faiss.read_index("faiss_index.idx")
+# # Load Embedding Model
+# try:
+#     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# except Exception as e:
+#     raise RuntimeError(f"Failed to load embedding model: {str(e)}")
 
-# # Load Hugging Face summarization model
-# summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+# # Constants
+# UPLOAD_DIR = "uploaded_files"
+# INDEX_FILE = "faiss_index"
+# DATA_FILE = "data.json"
 
-# # Load embedding model (AI-powered)
-# embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+# # Ensure Upload Directory Exists
+# os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# # # Load LLM (GPT4All - AI Model for Answering)
-# # llm = GPT4All("gpt4all-falcon-q4_0")
+# # FAISS Index Setup
+# d = 384  # Embedding dimension
+# index = faiss.IndexFlatL2(d) if not os.path.exists(INDEX_FILE) else faiss.read_index(INDEX_FILE)
 
-# model_path = r"C:\Users\vikas\ai-doc-reader\local_models\mistral-7b-instruct-v0.2-q4_k_m.gguf"
+# # Load Metadata
+# if os.path.exists(DATA_FILE):
+#     with open(DATA_FILE, "r") as f:
+#         metadata_store = json.load(f)
+# else:
+#     metadata_store = {}
 
-# # Load the model
-# llm = GPT4All(model_path, allow_download=False)  # Prevent download
-
-# # Example documents
-# docs = [
-#     "Artificial intelligence is the simulation of human intelligence by machines.",
-#     "FastAPI is a modern, high-performance web framework for Python.",
-#     "Elasticsearch is used for full-text search and analytics.",
-# ]
-
-# # Convert documents into embeddings
-# doc_embeddings = embedding_model.encode(docs)
-
-# # Store embeddings in FAISS index
-# index = faiss.IndexFlatL2(doc_embeddings.shape[1])
-# index.add(np.array(doc_embeddings))
-
-
-# class TextRequest(BaseModel):
-#     documents: List[str]  # Expecting a list of text inputs
-
-# class QueryModel(BaseModel):
-#     query: str
-#     top_k: int = 5
-
-# @app.post("/upload/", tags=["Upload"])
-# async def upload_file(file: UploadFile = File(...)):
-#     if not file.filename.endswith(".docx"):
-#         return {"error": "Only .docx files are supported"}
-
-#     # Read the Word document
-#     doc = Document(file.file)
-#     full_text = "\n".join([para.text for para in doc.paragraphs])
-
-#     # Summarize the content
-#     summary = summarizer(full_text, max_length=100, min_length=30, do_sample=False)
-#     summarized_text = summary[0]["summary_text"]
-
-#     return {"summary": summarized_text, "message": "Document processed successfully"}
-
-# @app.get("/", tags=["Root"])
-# def read_root():
-#     return {"message": "FastAPI is working!"}
-
-# @app.post("/embed/", tags=["Embedding"])
-# async def embed_text(request: TextRequest):
-#     """Receives multiple text inputs, generates embeddings, and stores them in FAISS"""
-#     all_embeddings = []
-#     all_texts = []  # Initialize list to store text chunks
-
-#     for text in request.documents:  # Iterate over each text input
-#         text_chunks = split_text(text)  # Split text into chunks
-#         embeddings = generate_embeddings(text_chunks)  # Generate embeddings for chunks
-#         all_embeddings.extend(embeddings)  # Collect embeddings for all texts
-#         all_texts.extend(text_chunks)  # Collect corresponding text chunks
-
-#     store_in_faiss(all_embeddings, all_texts)  # Store both embeddings & texts in FAISS
-#     return {"message": "Embeddings generated and stored in FAISS!"}
-
-
-# @app.post("/store/", tags=["Embedding"])
-# async def store_documents(documents: List[str]):
-#     """Store documents in FAISS after embedding them."""
-#     embeddings = generate_embeddings(documents)
-#     store_in_faiss(embeddings)
-#     return {"message": f"Stored {len(documents)} documents in FAISS."}
-
-# @app.post("/search/", tags=["Search"])
-# async def search_documents(query: QueryModel):
-#     """Search documents using FAISS index."""
-#     results = search_faiss(query.query, query.top_k)
-#     return {"query": query.query, "results": results}
-
-# class QueryRequest(BaseModel):
-#     query: str
-
-# @app.post("/process_query/")
-# async def process_query(request: QueryRequest):
-#     user_query = request.query
-#     # Implement your query processing logic here
-#     return {"response": f"Received query: {user_query}"}
-
-# # @app.post("/query/")
-# # async def process_query(request: QueryRequest):
-# #     user_query = request.query
-# #     query_embedding = get_query_embedding(user_query)
-# #     relevant_docs = search_documents(query_embedding)
-# #     response = generate_summary(relevant_docs)
-# #     return {"response": response}
-
-
-
-
-
-
-# @app.get("/query")
-# def query_ai(user_query: str = Query(..., title="User Query")):
-#     # Convert user query into embedding
-#     query_embedding = embedding_model.encode([user_query])
-
-#     # Search for the best matching document
-#     _, I = index.search(np.array(query_embedding), 1)
-#     best_match = docs[I[0][0]]
-
-#     # Use AI (GPT4All) to generate an answer
-#     response = llm.generate(f"Answer this based on the retrieved document: {best_match}")
-
-#     return {"user_query": user_query, "retrieved_info": best_match, "ai_answer": response}
-
-
-
-# if __name__ == "__main__":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
-from fastapi import FastAPI, UploadFile, File, Query
-from pydantic import BaseModel
-from transformers import pipeline
-from sentence_transformers import SentenceTransformer
-from gpt4all import GPT4All
-import uvicorn
-import faiss
-import numpy as np
-from docx import Document
-from typing import List
-import os
-
-app = FastAPI()
-
-# Initialize AI models dynamically
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")  # Can be changed dynamically
-summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-
-# Load FAISS index dynamically (if exists, else create a new one)
-index_path = "faiss_index.idx"
-if os.path.exists(index_path):
-    index = faiss.read_index(index_path)
-else:
-    index = None  # Will be initialized dynamically
-
-# Load GPT4All LLM dynamically
-model_path = os.getenv("MODEL_PATH", "local_models/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf")
-llm = GPT4All(model_path, allow_download=False)
-
-# Store document texts (to retrieve later by index)
-doc_texts = []
-
-class QueryModel(BaseModel):
-    query: str
-    top_k: int = 5
+# def extract_text(file_path: str) -> str:
+#     """Extracts text from PDF or DOCX files."""
+#     _, ext = os.path.splitext(file_path)
+    
+#     if ext.lower() == ".pdf":
+#         try:
+#             with open(file_path, "rb") as f:
+#                 reader = PyPDF2.PdfReader(f)
+#                 return " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
+#         except Exception as e:
+#             raise HTTPException(status_code=500, detail=f"Error reading PDF: {str(e)}")
+    
+#     elif ext.lower() == ".docx":
+#         try:
+#             doc = docx.Document(file_path)
+#             return " ".join([para.text for para in doc.paragraphs])
+#         except Exception as e:
+#             raise HTTPException(status_code=500, detail=f"Error reading DOCX: {str(e)}")
+    
+#     raise HTTPException(status_code=400, detail="Unsupported file format")
 
 # @app.post("/upload/")
 # async def upload_file(file: UploadFile = File(...)):
-#     """Uploads a .docx file, extracts text, generates embeddings, and stores them dynamically in FAISS."""
-#     global index, doc_texts
-    
-#     if not file.filename.endswith(".docx"):
-#         return {"error": "Only .docx files are supported"}
+#     """Handles file uploads and stores embeddings in FAISS index."""
+#     file_ext = os.path.splitext(file.filename)[1].lower()
+#     if file_ext not in [".pdf", ".docx"]:
+#         raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported")
 
-#     doc = Document(file.file)
-#     full_text = "\n".join([para.text for para in doc.paragraphs])
-#     doc_texts.append(full_text)
+#     file_id = str(uuid.uuid4())
+#     file_path = os.path.join(UPLOAD_DIR, f"{file_id}{file_ext}")
 
-#     # Summarize content
-#     summary = summarizer(full_text, max_length=100, min_length=30, do_sample=False)
-#     summarized_text = summary[0]["summary_text"]
-    
-#     # Generate embeddings
-#     embeddings = embedding_model.encode([full_text])
-    
-#     # Initialize FAISS index if not already
-#     if index is None:
-#         index = faiss.IndexFlatL2(embeddings.shape[1])
-    
-#     index.add(np.array(embeddings))
-#     faiss.write_index(index, index_path)
+#     try:
+#         with open(file_path, "wb") as f:
+#             shutil.copyfileobj(file.file, f)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
-#     return {"summary": summarized_text, "message": "Document stored successfully!"}
+#     text = extract_text(file_path)
+#     if not text.strip():
+#         os.remove(file_path)  
+#         raise HTTPException(status_code=400, detail="Document contains no readable text")
 
-@app.post("/reset_index", tags=["Debug"])
-def reset_index():
-    global index, doc_texts
-    # Clear the in-memory document list
-    doc_texts = []
-    # Remove the FAISS index file if it exists
-    index_file = "faiss_index.idx"
-    if os.path.exists(index_file):
-        os.remove(index_file)
-    # Reinitialize the index to None (it will be created upon the next upload)
-    index = None
-    return {"message": "FAISS index and document storage have been reset."}
+#     try:
+#         embedding = embedding_model.encode([text])[0]
+#         index.add(np.array([embedding], dtype=np.float32))
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to generate embedding: {str(e)}")
 
-@app.post("/upload/")
-async def upload_file(file: UploadFile = File(...)):
-    global index, doc_texts  # Make sure these globals are accessible
-    if not file.filename.endswith(".docx"):
-        return {"error": "Only .docx files are supported"}
+#     metadata_store[file_id] = {"filename": file.filename, "content": text}
 
-    doc = Document(file.file)
-    full_text = "\n".join([para.text for para in doc.paragraphs])
-    
-    # Append the full text or its chunks to doc_texts
-    doc_texts.append(full_text)
-    
-    # Summarize and generate embeddings
-    summary = summarizer(full_text, max_length=100, min_length=30, do_sample=False)
-    summarized_text = summary[0]["summary_text"]
-    
-    embeddings = embedding_model.encode([full_text])
-    
-    # Initialize FAISS if needed
-    if index is None:
-        index = faiss.IndexFlatL2(embeddings.shape[1])
-    
-    index.add(np.array(embeddings))
-    faiss.write_index(index, "faiss_index.idx")
-    
-    return {"summary": summarized_text, "message": "Document stored successfully!"}
+#     faiss.write_index(index, INDEX_FILE)
+#     with open(DATA_FILE, "w") as f:
+#         json.dump(metadata_store, f)
+
+#     return JSONResponse(content={"message": "File uploaded successfully", "file_id": file_id})
+
+# @app.get("/search/")
+# async def search_documents(query: str = Query(..., min_length=3), top_k: int = Query(5, ge=1, le=20)):
+#     """Searches for relevant documents based on user query."""
+#     if index.ntotal == 0:
+#         raise HTTPException(status_code=400, detail="No documents available for search")
+
+#     try:
+#         query_embedding = embedding_model.encode([query])[0].reshape(1, -1)
+#         distances, indices = index.search(query_embedding, top_k)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+#     results = [
+#         {"file_id": list(metadata_store.keys())[idx], "filename": metadata_store[list(metadata_store.keys())[idx]]["filename"], "distance": float(dist)}
+#         for dist, idx in zip(distances[0], indices[0]) if idx < len(metadata_store)
+#     ]
+
+#     return JSONResponse(content={"results": results})
+
+# @app.get("/index_stats/")
+# async def index_stats():
+#     """Returns the number of documents stored in FAISS index."""
+#     return JSONResponse(content={"total_documents": index.ntotal})
+
+# @app.post("/rebuild_index/")
+# async def rebuild_index():
+#     """Rebuilds the FAISS index from stored metadata and documents."""
+#     global index
+#     index = faiss.IndexFlatL2(d) 
+
+#     if not metadata_store:
+#         return JSONResponse(content={"message": "No documents found to rebuild index"})
+
+#     try:
+#         for file_id, data in metadata_store.items():
+#             embedding = embedding_model.encode([data["content"]])[0]
+#             index.add(np.array([embedding], dtype=np.float32))
+
+#         faiss.write_index(index, INDEX_FILE)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to rebuild index: {str(e)}")
+
+#     return JSONResponse(content={"message": "Index rebuilt successfully", "total_documents": index.ntotal})
+
+# @app.delete("/delete/{file_id}")
+# async def delete_document(file_id: str):
+#     """Deletes a document from storage and FAISS index."""
+#     if file_id not in metadata_store:
+#         raise HTTPException(status_code=404, detail="File not found")
+
+#     del metadata_store[file_id]
+
+#     try:
+#         with open(DATA_FILE, "w") as f:
+#             json.dump(metadata_store, f)
+#         faiss.write_index(index, INDEX_FILE)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
+#     return JSONResponse(content={"message": "File deleted successfully"})
+
+# @app.post("/reset_index/")
+# async def reset_index():
+#     """Resets the FAISS index, deletes metadata, and clears uploaded files."""
+#     global index, metadata_store
+
+#     try:
+#         index = faiss.IndexFlatL2(d)
+#         faiss.write_index(index, INDEX_FILE)
+#         metadata_store.clear()
+
+#         if os.path.exists(DATA_FILE):
+#             os.remove(DATA_FILE)
+
+#         for file in os.listdir(UPLOAD_DIR):
+#             file_path = os.path.join(UPLOAD_DIR, file)
+#             if os.path.isfile(file_path):
+#                 os.remove(file_path)
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Failed to reset index: {str(e)}")
+
+#     return JSONResponse(content={"message": "Index reset successfully, all files and metadata deleted"})
+
+# @app.get("/query/")
+# async def query_documents(query: str = Query(..., min_length=3)):
+#     """Fetches the **most relevant part** of a document instead of the full content."""
+#     if not metadata_store:
+#         raise HTTPException(status_code=404, detail="No documents available for search")
+
+#     query_embedding = embedding_model.encode([query])[0].reshape(1, -1)
+#     distances, indices = index.search(query_embedding, 5)
+
+#     best_match, best_score, best_file = None, -1, None
+
+#     for dist, idx in zip(distances[0], indices[0]):
+#         if idx < len(metadata_store):
+#             file_id = list(metadata_store.keys())[idx]
+#             content = metadata_store[file_id]["content"]
+#             sentences = content.split(". ")
+#             sentence_embeddings = embedding_model.encode(sentences)
+            
+#             similarities = util.pytorch_cos_sim(query_embedding, sentence_embeddings)[0].cpu().numpy()
+#             best_sentence = sentences[np.argmax(similarities)]
+
+#             if similarities[np.argmax(similarities)] > best_score:
+#                 best_score, best_match, best_file = similarities[np.argmax(similarities)], best_sentence, metadata_store[file_id]["filename"]
+
+#     return JSONResponse(content={"file": best_file, "matched_text": best_match})
 
 
-@app.post("/search/")
-async def search_documents(query: QueryModel):
-    """Searches for the most relevant document embeddings from FAISS."""
-    if index is None or len(doc_texts) == 0:
-        return {"error": "No documents found in the FAISS index."}
-    
-    query_embedding = embedding_model.encode([query.query])
-    distances, indices = index.search(np.array(query_embedding), query.top_k)
-    
-    results = [doc_texts[idx] for idx in indices[0] if idx < len(doc_texts)]
-    return {"query": query.query, "results": results}
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.responses import JSONResponse
+from sentence_transformers import SentenceTransformer, util
+import faiss
+import numpy as np
+import os
+import shutil
+import uuid
+import PyPDF2
+import docx
+import json
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+import torch
 
-@app.get("/query")
-def query_ai(user_query: str = Query(..., title="User Query")):
-    """Queries the LLM based on retrieved document embeddings."""
-    if index is None or len(doc_texts) == 0:
-        return {"error": "No stored documents for AI to reference."}
-    
-    query_embedding = embedding_model.encode([user_query])
-    distances, indices = index.search(np.array(query_embedding), 1)
-    best_match = doc_texts[indices[0][0]] if indices[0][0] < len(doc_texts) else "No relevant document found."
-    
-    response = llm.generate(f"Answer this based on the retrieved document: {best_match}")
-    return {"user_query": user_query, "retrieved_info": best_match, "ai_answer": response}
+app = FastAPI()
 
-@app.get("/faiss-docs", tags=["Debug"])
-def get_faiss_docs():
-    if index is None:
-        return {"error": "FAISS index is not created yet."}
-    return {"faiss_count": index.ntotal, "documents": doc_texts}
+# Load Embedding Model
+try:
+    embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+except Exception as e:
+    raise RuntimeError(f"Failed to load embedding model: {str(e)}")
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Load Phi-2 (2.7B) Model
+try:
+    model_name = "microsoft/phi-2"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16)
+    qa_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
+except Exception as e:
+    raise RuntimeError(f"Failed to load Phi-2 model: {str(e)}")
+
+# Constants
+UPLOAD_DIR = "uploaded_files"
+INDEX_FILE = "faiss_index"
+DATA_FILE = "data.json"
+
+# Ensure Upload Directory Exists
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# FAISS Index Setup
+d = 384  # Embedding dimension
+index = faiss.IndexFlatL2(d) if not os.path.exists(INDEX_FILE) else faiss.read_index(INDEX_FILE)
+
+# Load Metadata
+if os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "r") as f:
+        metadata_store = json.load(f)
+else:
+    metadata_store = {}
+
+def extract_text(file_path: str) -> str:
+    """Extracts text from PDF or DOCX files."""
+    _, ext = os.path.splitext(file_path)
+    
+    if ext.lower() == ".pdf":
+        try:
+            with open(file_path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                return " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error reading PDF: {str(e)}")
+    
+    elif ext.lower() == ".docx":
+        try:
+            doc = docx.Document(file_path)
+            return " ".join([para.text for para in doc.paragraphs])
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error reading DOCX: {str(e)}")
+    
+    raise HTTPException(status_code=400, detail="Unsupported file format")
+
+@app.get("/query/")
+async def query_documents(query: str = Query(..., min_length=3)):
+    """Generates a meaningful answer based on document knowledge using Phi-2."""
+    if not metadata_store:
+        raise HTTPException(status_code=404, detail="No documents available for search")
+
+    try:
+        query_embedding = embedding_model.encode([query])[0].reshape(1, -1)
+        distances, indices = index.search(query_embedding, 5)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+    best_match, best_file, best_content = None, None, None
+    
+    for dist, idx in zip(distances[0], indices[0]):
+        if idx < len(metadata_store):
+            file_id = list(metadata_store.keys())[idx]
+            content = metadata_store[file_id]["content"]
+            best_match, best_file, best_content = file_id, metadata_store[file_id]["filename"], content
+            break  
+    
+    if not best_match:
+        return JSONResponse(content={"message": "No relevant information found."})
+
+    # Generate a meaningful answer using Phi-2
+    prompt = f"Q: {query}\nBased on the following text, generate a human-like response:\n\n{best_content}\n\nA:"
+    ai_response = qa_pipeline(prompt, max_length=100, num_return_sequences=1)[0]["generated_text"]
+    
+    return JSONResponse(content={"file": best_file, "answer": ai_response})
